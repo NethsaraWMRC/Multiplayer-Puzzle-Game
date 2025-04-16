@@ -13,6 +13,7 @@ const io = new Server(server, {
 
 let rooms = {}; // roomId -> array of socketIds
 let players = {}; // roomId -> { socketId: { row, col } }
+const GOAL_POSITION = { row: 11, col: 30 };
 
 io.on("connection", (socket) => {
   console.log(`Player connected: ${socket.id}`);
@@ -42,37 +43,85 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (room.size >= 2) {
+    // Use the 'players' object for tracking count within the room
+    const currentPlayersInRoom = players[roomId]
+      ? Object.keys(players[roomId]).length
+      : 0;
+    if (currentPlayersInRoom >= 2) {
       socket.emit("room-joined", { error: "Room is full" });
       return;
     }
 
     socket.join(roomId);
-    rooms[roomId].push(socket.id);
-    socket.emit("room-joined", { roomId });
-    console.log(`Player ${socket.id} joined room: ${roomId}`);
 
-    // Start countdown when both players are in
-    if (rooms[roomId].length === 2) {
+    // Ensure room structures exist
+    if (!rooms[roomId]) rooms[roomId] = []; // Should ideally exist from create-room
+    if (!players[roomId]) players[roomId] = {};
+
+    // Add player to room tracking (if not already there somehow)
+    if (!rooms[roomId].includes(socket.id)) {
+      rooms[roomId].push(socket.id);
+    }
+
+    // Assign position based on who is already there
+    // NOTE: Ensure these coords [3,1] and [17,1] are valid path cells '1' in your maze array!
+    const playerPosition =
+      currentPlayersInRoom === 0 ? { row: 3, col: 1 } : { row: 17, col: 1 };
+    players[roomId][socket.id] = playerPosition;
+
+    console.log(
+      `Player ${socket.id} assigned position in room ${roomId}:`,
+      playerPosition
+    );
+    console.log(`Current players in room ${roomId}:`, players[roomId]);
+
+    // 1. Send 'room-joined' confirmation ONLY to the joining player
+    socket.emit("room-joined", { roomId });
+
+    // 2. Send 'init' event ONLY to the joining player (socket)
+    //    This tells them their ID and the current state of all players in the room.
+    socket.emit("init", { id: socket.id, players: players[roomId] });
+    console.log(`Sent 'init' to joining player ${socket.id}`);
+
+    // 3. Notify *OTHER* players in the room about the new player
+    //    Use 'player-joined' event which the client already handles.
+    socket.broadcast.to(roomId).emit("player-joined", {
+      id: socket.id,
+      position: playerPosition,
+    });
+    console.log(`Broadcast 'player-joined' for ${socket.id} to room ${roomId}`);
+
+    // --- This broadcast 'init' was the problem, REMOVE it ---
+    // io.to(roomId).emit("init", { id: socket.id, players: players[roomId] });
+
+    // --- Start countdown if room is now full ---
+    // Use Object.keys on the definitive player state for the room
+    if (Object.keys(players[roomId]).length === 2) {
+      console.log(`Room ${roomId} is full. Starting countdown.`);
       let countdown = 3;
       const interval = setInterval(() => {
         io.to(roomId).emit("countdown", countdown);
         if (countdown === 0) {
           io.to(roomId).emit("game-start");
           clearInterval(interval);
+          console.log(`Game started in room ${roomId}`);
         }
         countdown--;
       }, 1000);
+    } else {
+      console.log(
+        `Room ${roomId} has ${
+          Object.keys(players[roomId]).length
+        } player(s). Waiting for more.`
+      );
     }
   });
 
   // --- Handle player movement ---
+  // --- Handle player movement ---
   socket.on("move", (newPosition) => {
     const roomId = findPlayerRoom(socket.id);
     if (!roomId || !players[roomId][socket.id]) return;
-
-    // Only allow move if both players are present
-    if (Object.keys(players[roomId]).length < 2) return;
 
     players[roomId][socket.id] = newPosition;
 
@@ -80,6 +129,28 @@ io.on("connection", (socket) => {
       id: socket.id,
       position: newPosition,
     });
+
+    // Check if player reached goal
+    if (
+      newPosition.row === GOAL_POSITION.row &&
+      newPosition.col === GOAL_POSITION.col
+    ) {
+      // Send game-over to both players
+      const playerIds = Object.keys(players[roomId]);
+
+      playerIds.forEach((id) => {
+        io.to(id).emit("game-over", {
+          winner: socket.id,
+          youWon: id === socket.id,
+        });
+      });
+
+      console.log(`Game over! Winner: ${socket.id} in room ${roomId}`);
+
+      // Optionally reset room state
+      delete rooms[roomId];
+      delete players[roomId];
+    }
   });
 
   // --- Handle disconnect ---

@@ -11,6 +11,10 @@ const Maze = ({ maze }) => {
   const [roomId, setRoomId] = useState(null);
   const [isHost, setIsHost] = useState(false);
   const [roomCode, setRoomCode] = useState(""); // Add this line
+  const [countdown, setCountdown] = useState(null);
+  const [gameStarted, setGameStarted] = useState(false);
+  const [gameOver, setGameOver] = useState(null); // { youWon: true/false }
+  const [gameFinished, setGameFinished] = useState(false);
 
   const rows = maze.length;
   const cols = maze[0].length;
@@ -25,6 +29,15 @@ const Maze = ({ maze }) => {
   };
 
   useEffect(() => {
+    socket.on("countdown", (count) => {
+      setCountdown(count);
+    });
+
+    socket.on("game-start", () => {
+      setGameStarted(true);
+      setCountdown(null); // clear the counter
+    });
+
     // Define all handler functions first
     const handleConnect = () => {
       console.log("Socket connected!", socket.id);
@@ -78,8 +91,17 @@ const Maze = ({ maze }) => {
       });
     };
 
+    const handleGameOver = ({ winner, youWon }) => {
+      console.log(`Game Over! Winner: ${winner}, You won: ${youWon}`);
+      setGameStarted(false);
+      setGameOver({ youWon });
+      setGameFinished(true);
+    };
+
     // Then attach all listeners
     console.log("Attaching socket listeners...");
+
+    socket.on("game-over", handleGameOver);
     socket.on("connect", handleConnect);
     socket.on("init", handleInit);
     socket.on("room-created", handleRoomCreated);
@@ -101,11 +123,14 @@ const Maze = ({ maze }) => {
       socket.off("player-left", handlePlayerLeft);
       socket.off("disconnect", handleDisconnect);
       socket.off("connect_error", handleConnectError);
+      socket.off("game-over", handleGameOver);
     };
   }, []);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (!gameStarted) return;
+
       const myPos = players[playerId];
       if (!myPos) return;
 
@@ -134,10 +159,21 @@ const Maze = ({ maze }) => {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [players, playerId, maze, rows, cols]);
+  }, [players, playerId, maze, rows, cols, gameStarted]);
 
   return (
     <div className="container">
+      {countdown !== null && (
+        <div className="countdown-overlay">
+          <h1>Game starts in: {countdown}</h1>
+        </div>
+      )}
+      {gameOver && (
+        <div className="game-over-overlay">
+          <h1>{gameOver.youWon ? "You Win!" : "You Lose"}</h1>
+        </div>
+      )}
+
       {!roomId && (
         <div className="room-controls">
           <button onClick={createRoom}>Create New Room</button>
