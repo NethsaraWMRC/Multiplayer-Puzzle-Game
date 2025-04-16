@@ -8,26 +8,65 @@ const socket = io("http://localhost:3001");
 const Maze = ({ maze }) => {
   const [playerId, setPlayerId] = useState(null);
   const [players, setPlayers] = useState({});
+  const [roomId, setRoomId] = useState(null);
+  const [isHost, setIsHost] = useState(false);
+  const [roomCode, setRoomCode] = useState(""); // Add this line
 
   const rows = maze.length;
   const cols = maze[0].length;
 
+  // Add this after the state declarations
+  const createRoom = () => {
+    socket.emit("create-room");
+  };
+
+  const joinRoom = (roomCode) => {
+    socket.emit("join-room", roomCode);
+  };
+
   useEffect(() => {
-    // Define listener functions separately to easily add/remove them
+    // Define all handler functions first
+    const handleConnect = () => {
+      console.log("Socket connected!", socket.id);
+    };
+
+    const handleDisconnect = (reason) => {
+      console.log("Socket disconnected:", reason);
+    };
+
+    const handleConnectError = (err) => {
+      console.error("Socket connection error:", err);
+    };
+
     const handleInit = ({ id, players: initialPlayers }) => {
       console.log("Received 'init':", { id, initialPlayers });
       setPlayerId(id);
       setPlayers(initialPlayers);
     };
 
+    const handleRoomCreated = ({ roomId }) => {
+      console.log("Room created:", roomId);
+      setRoomId(roomId);
+      setIsHost(true);
+    };
+
+    const handleRoomJoined = ({ roomId, error }) => {
+      if (error) {
+        console.error("Error joining room:", error);
+        return;
+      }
+      console.log("Joined room:", roomId);
+      setRoomId(roomId);
+    };
+
     const handlePlayerJoined = ({ id, position }) => {
       console.log("Received 'player-joined':", { id, position });
-      setPlayers((prev) => ({ ...prev, [id]: position })); // Simplified update
+      setPlayers((prev) => ({ ...prev, [id]: position }));
     };
 
     const handlePlayerMoved = ({ id, position }) => {
       console.log("Received 'player-moved':", { id, position });
-      setPlayers((prev) => ({ ...prev, [id]: position })); // Simplified update
+      setPlayers((prev) => ({ ...prev, [id]: position }));
     };
 
     const handlePlayerLeft = (id) => {
@@ -39,38 +78,17 @@ const Maze = ({ maze }) => {
       });
     };
 
-    const handleConnect = () => {
-      console.log("Socket connected!", socket.id);
-    };
-
-    const handleDisconnect = (reason) => {
-      console.log("Socket disconnected:", reason);
-      // Optional: You might want to clear player state or show a message on disconnect
-      // setPlayers({});
-      // setPlayerId(null);
-    };
-
-    const handleConnectError = (err) => {
-      console.error("Socket connection error:", err);
-    };
-
-    // --- Attach listeners ---
+    // Then attach all listeners
     console.log("Attaching socket listeners...");
     socket.on("connect", handleConnect);
     socket.on("init", handleInit);
+    socket.on("room-created", handleRoomCreated);
+    socket.on("room-joined", handleRoomJoined);
     socket.on("player-joined", handlePlayerJoined);
     socket.on("player-moved", handlePlayerMoved);
     socket.on("player-left", handlePlayerLeft);
     socket.on("disconnect", handleDisconnect);
     socket.on("connect_error", handleConnectError);
-
-    // --- Ensure connection if not already connected ---
-    // The io() call usually initiates connection, but explicit connect()
-    // can be used if manual connection control is needed.
-    // Generally, this isn't necessary if socket is defined outside.
-    // if (!socket.connected) {
-    //   socket.connect();
-    // }
 
     // --- Cleanup function ---
     return () => {
@@ -83,9 +101,6 @@ const Maze = ({ maze }) => {
       socket.off("player-left", handlePlayerLeft);
       socket.off("disconnect", handleDisconnect);
       socket.off("connect_error", handleConnectError);
-
-      // **Do NOT disconnect here if the socket instance is shared/module-level**
-      // socket.disconnect(); // <--- Remove or comment this out
     };
   }, []);
 
@@ -122,35 +137,56 @@ const Maze = ({ maze }) => {
   }, [players, playerId, maze, rows, cols]);
 
   return (
-    <div
-      className="maze"
-      style={{
-        gridTemplateColumns: `repeat(${cols}, 40px)`,
-        gridTemplateRows: `repeat(${rows}, 40px)`,
-      }}
-    >
-      {maze.map((row, rowIndex) =>
-        row.map((cell, colIndex) => {
-          const isWall = cell === 0;
-
-          // Check if a player is on this cell
-          const playerHere = Object.entries(players).find(
-            ([, pos]) => pos.row === rowIndex && pos.col === colIndex
-          );
-
-          const isSelf = playerHere && playerHere[0] === playerId;
-          const isOther = playerHere && playerHere[0] !== playerId;
-
-          return (
-            <div
-              key={`${rowIndex}-${colIndex}`}
-              className={`cell ${isWall ? "wall" : "path"} ${
-                isSelf ? "player" : isOther ? "enemy" : ""
-              }`}
+    <div className="container">
+      {!roomId && (
+        <div className="room-controls">
+          <button onClick={createRoom}>Create New Room</button>
+          <div>
+            <input
+              type="text"
+              placeholder="Enter Room Code"
+              onChange={(e) => setRoomCode(e.target.value)}
             />
-          );
-        })
+            <button onClick={() => joinRoom(roomCode)}>Join Room</button>
+          </div>
+        </div>
       )}
+      {roomId && (
+        <div className="room-info">
+          <p>Room Code: {roomId}</p>
+          <p>Players: {Object.keys(players).length}/2</p>
+        </div>
+      )}
+      <div
+        className="maze"
+        style={{
+          gridTemplateColumns: `repeat(${cols}, 20px)`,
+          gridTemplateRows: `repeat(${rows}, 20px)`,
+        }}
+      >
+        {maze.map((row, rowIndex) =>
+          row.map((cell, colIndex) => {
+            const isWall = cell === 0;
+
+            // Check if a player is on this cell
+            const playerHere = Object.entries(players).find(
+              ([, pos]) => pos.row === rowIndex && pos.col === colIndex
+            );
+
+            const isSelf = playerHere && playerHere[0] === playerId;
+            const isOther = playerHere && playerHere[0] !== playerId;
+
+            return (
+              <div
+                key={`${rowIndex}-${colIndex}`}
+                className={`cell ${isWall ? "wall" : "path"} ${
+                  isSelf ? "player" : isOther ? "enemy" : ""
+                }`}
+              />
+            );
+          })
+        )}
+      </div>
     </div>
   );
 };
